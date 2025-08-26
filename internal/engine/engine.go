@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nikhil478/rate-limiter/internal/models"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -58,7 +59,7 @@ Steps:
 
 This hybrid model ensures fairness (Sliding Window) while preventing bursts (Token Bucket).
 */
-func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, headers models.RateLimitResponseHeaders,err error) {
 
 	now := time.Now().Unix()
 	logKey := fmt.Sprintf("log:%s", key)
@@ -66,27 +67,27 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	minScore := "0"
 	maxScore := fmt.Sprintf("%d", now-int64(rl.WindowSize.Seconds()))
 	if err := rl.RedisClient.ZRemRangeByScore(ctx, logKey, minScore, maxScore).Err(); err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	count, err := rl.RedisClient.ZCard(ctx, logKey).Result()
 	if err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	if count >= int64(rl.MaxWindow) {
-		return false, nil
+		return false, headers, nil
 	}
 
 	if err := rl.RedisClient.ZAdd(ctx, logKey, redis.Z{
 		Score:  float64(now),
 		Member: now,
 	}).Err(); err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	if err := rl.RedisClient.Expire(ctx, logKey, rl.WindowSize).Err(); err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	tokenKey := fmt.Sprintf("tokens:%s", key)
@@ -96,14 +97,14 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	if err == redis.Nil {
 		tokens = rl.BucketSize
 	} else if err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	lastRefill, err := rl.RedisClient.Get(ctx, timeKey).Int64()
 	if err == redis.Nil {
 		lastRefill = now
 	} else if err != nil {
-		return false, err
+		return false, headers, err
 	}
 
 	elapsed := now - lastRefill
@@ -114,18 +115,18 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	}
 
 	if tokens <= 0 {
-		return false, nil
+		return false, headers, nil
 	}
 	tokens--
 
 	if err := rl.RedisClient.Set(ctx, tokenKey, tokens, 0).Err(); err != nil {
-		return false, err
+		return false, headers, err
 	}
 	if err := rl.RedisClient.Set(ctx, timeKey, lastRefill, 0).Err(); err != nil {
-		return false, err
+		return false, headers, err
 	}
 
-	return true, nil
+	return true,headers, nil
 }
 
 func min(a, b int) int {
