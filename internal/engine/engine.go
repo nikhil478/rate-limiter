@@ -59,10 +59,13 @@ Steps:
 
 This hybrid model ensures fairness (Sliding Window) while preventing bursts (Token Bucket).
 */
-func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, headers models.RateLimitResponseHeaders,err error) {
-
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, headers models.RateLimitResponseHeaders, err error) {
 	now := time.Now().Unix()
 	logKey := fmt.Sprintf("log:%s", key)
+
+	headers.XRateLimitLimit = rl.MaxWindow
+	headers.XRateLimitWindow = int(rl.WindowSize.Seconds())
+	headers.XRateLimitBucket = rl.BucketSize
 
 	minScore := "0"
 	maxScore := fmt.Sprintf("%d", now-int64(rl.WindowSize.Seconds()))
@@ -76,8 +79,14 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, h
 	}
 
 	if count >= int64(rl.MaxWindow) {
+		headers.XRateLimitRemaining = 0
+		headers.XRateLimitReset = int(time.Now().Add(rl.WindowSize).Unix())
+		headers.RetryAfter = int(rl.RefillRate.Seconds())
 		return false, headers, nil
 	}
+
+	headers.XRateLimitRemaining = rl.MaxWindow - (int(count) + 1)
+	headers.XRateLimitReset = int(time.Now().Add(rl.WindowSize).Unix())
 
 	if err := rl.RedisClient.ZAdd(ctx, logKey, redis.Z{
 		Score:  float64(now),
@@ -115,8 +124,11 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, h
 	}
 
 	if tokens <= 0 {
+		headers.XRateLimitRemaining = 0
+		headers.RetryAfter = int(rl.RefillRate.Seconds())
 		return false, headers, nil
 	}
+
 	tokens--
 
 	if err := rl.RedisClient.Set(ctx, tokenKey, tokens, 0).Err(); err != nil {
@@ -126,8 +138,9 @@ func (rl *RateLimiter) Allow(ctx context.Context, key string) (isAllowed bool, h
 		return false, headers, err
 	}
 
-	return true,headers, nil
+	return true, headers, nil
 }
+
 
 func min(a, b int) int {
 	if a < b {
