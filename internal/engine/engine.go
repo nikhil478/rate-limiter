@@ -1,10 +1,11 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis"
+	"github.com/redis/go-redis/v9"
 )
 
 type RateLimiter struct {
@@ -57,18 +58,18 @@ Steps:
 
 This hybrid model ensures fairness (Sliding Window) while preventing bursts (Token Bucket).
 */
-func (rl *RateLimiter) Allow(key string) (bool, error) {
+func (rl *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 
 	now := time.Now().Unix()
 	logKey := fmt.Sprintf("log:%s", key)
 
 	minScore := "0"
 	maxScore := fmt.Sprintf("%d", now-int64(rl.WindowSize.Seconds()))
-	if err := rl.RedisClient.ZRemRangeByScore(logKey, minScore, maxScore).Err(); err != nil {
+	if err := rl.RedisClient.ZRemRangeByScore(ctx, logKey, minScore, maxScore).Err(); err != nil {
 		return false, err
 	}
 
-	count, err := rl.RedisClient.ZCard(logKey).Result()
+	count, err := rl.RedisClient.ZCard(ctx, logKey).Result()
 	if err != nil {
 		return false, err
 	}
@@ -77,28 +78,28 @@ func (rl *RateLimiter) Allow(key string) (bool, error) {
 		return false, nil
 	}
 
-	if err := rl.RedisClient.ZAdd(logKey, redis.Z{
+	if err := rl.RedisClient.ZAdd(ctx, logKey, redis.Z{
 		Score:  float64(now),
 		Member: now,
 	}).Err(); err != nil {
 		return false, err
 	}
 
-	if err := rl.RedisClient.Expire(logKey, rl.WindowSize).Err(); err != nil {
+	if err := rl.RedisClient.Expire(ctx, logKey, rl.WindowSize).Err(); err != nil {
 		return false, err
 	}
 
 	tokenKey := fmt.Sprintf("tokens:%s", key)
 	timeKey := fmt.Sprintf("lastRefill:%s", key)
 
-	tokens, err := rl.RedisClient.Get(tokenKey).Int()
+	tokens, err := rl.RedisClient.Get(ctx, tokenKey).Int()
 	if err == redis.Nil {
 		tokens = rl.BucketSize
 	} else if err != nil {
 		return false, err
 	}
 
-	lastRefill, err := rl.RedisClient.Get(timeKey).Int64()
+	lastRefill, err := rl.RedisClient.Get(ctx, timeKey).Int64()
 	if err == redis.Nil {
 		lastRefill = now
 	} else if err != nil {
@@ -117,10 +118,10 @@ func (rl *RateLimiter) Allow(key string) (bool, error) {
 	}
 	tokens--
 
-	if err := rl.RedisClient.Set(tokenKey, tokens, 0).Err(); err != nil {
+	if err := rl.RedisClient.Set(ctx, tokenKey, tokens, 0).Err(); err != nil {
 		return false, err
 	}
-	if err := rl.RedisClient.Set(timeKey, lastRefill, 0).Err(); err != nil {
+	if err := rl.RedisClient.Set(ctx, timeKey, lastRefill, 0).Err(); err != nil {
 		return false, err
 	}
 

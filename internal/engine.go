@@ -1,32 +1,44 @@
 package internal
 
 import (
+	"context"
 	"log"
 	"net/http"
-)
+	"time"
 
+	"github.com/nikhil478/rate-limiter/internal/engine"
+	"github.com/nikhil478/rate-limiter/internal/redis_client"
+)
 
 func StartEngine() {
 
-	handler := http.NewServeMux()
+	ctx := context.Background()
+	redisClient := redis_client.CreateRedisInstance()
+	rateLimiter := engine.NewRateLimiter(redisClient, time.Minute, 10, 3, 6*time.Second)
 
-	// window for sliding window
-	// token bucket for token bucket pattern
-	// refelling rate
-	// window size 
+	mux := http.NewServeMux()
 
-	// need redis for noting in db
-	// need zookeeper for loading config in env
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		isAllowed, err := rateLimiter.Allow(ctx, "abcd")
 
+		if err != nil {
+			log.Printf("rate limiter error: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	handler.HandleFunc("/health",func(w http.ResponseWriter,r *http.Request) {
-		w.WriteHeader(200)
-		w.Write([]byte("Hello World \n"))
+		if !isAllowed {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Hello World\n"))
 	})
 
+	serverAddr := ":8080"
 
-	if err := http.ListenAndServe(":8080", handler); err != nil {
-		log.Fatalf("error while starting rate limiter engine ! err %v", err) 
+	if err := http.ListenAndServe(serverAddr, mux); err != nil {
+		log.Fatalf("error while starting server: %v", err)
 	}
-
 }
