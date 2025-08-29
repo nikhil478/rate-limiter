@@ -1,6 +1,3 @@
-markdown
-# Project README
-
 ## Project Summary
 
 This project is a work in progress. The goal is to build a system using Go, with services orchestrated through Docker Compose. Eventually, I plan to explore Kubernetes to run this project across multiple clusters. Right now, it’s a learning playground where I’m experimenting and improving my skills.
