@@ -10,7 +10,7 @@ You can get the system up and running in two simple steps:
    From the root directory, run:  
    ```bash
    docker compose -f docker-compose.yaml up
-````
+   ```
 
 2. Run the Go application
    From the project root, execute:
